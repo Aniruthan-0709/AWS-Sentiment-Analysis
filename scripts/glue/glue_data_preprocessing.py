@@ -44,6 +44,13 @@ logger.info(f"🗑️ Records dropped: {initial_count - filtered_count}")
 for text_col in ["review_body", "review_headline"]:
     df = df.withColumn(text_col, regexp_replace(trim(lower(col(text_col))), r"\s+", " "))
 logger.info("🔤 Text normalization completed for: review_body, review_headline")
+# -------------------------------------------
+# Drop duplicates
+# -------------------------------------------
+before_dedup = df.count()
+df = df.dropDuplicates(["review_body"])
+after_dedup = df.count()
+logger.info(f"🧹 Dropped {before_dedup - after_dedup} duplicate reviews based on cleaned 'review_body'")
 
 # -------------------------------------------
 # Save to pre_processed output
