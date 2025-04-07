@@ -1,1 +1,24 @@
 boto3
+# NLP + Transformers
+transformers==4.26.1
+datasets==2.10.1
+tokenizers>=0.12.1
+
+# ML + Deep Learning
+torch>=1.13.1
+scikit-learn>=1.2.2
+
+# Tracking
+mlflow>=2.2.2
+
+# SageMaker SDK
+sagemaker>=2.145.0
+boto3>=1.26.0
+
+# Data handling
+pandas>=1.5.3
+numpy>=1.23.5
+
+# Optional (for logging / visualizing)
+tqdm
+matplotlib
