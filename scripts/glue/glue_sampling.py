@@ -1,6 +1,8 @@
-import logging
+import os
 import json
 import boto3
+import logging
+import re
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
 from pyspark.sql.functions import col, when, rand
@@ -23,7 +25,8 @@ spark = glueContext.spark_session
 # -------------------------------------------
 input_path = "s3://mlops-sentiment-analysis-data/Bronze/anomaly_flagged.parquet"
 parquet_output_path = "s3://mlops-sentiment-analysis-data/Bronze/train_final.parquet"
-csv_output_path = "s3://mlops-sentiment-analysis-data/Silver/sampled.csv"
+temp_csv_output_path = "s3://mlops-sentiment-analysis-data/tmp/sampled_temp_csv"
+final_csv_key = "Silver/sampled.csv"
 metadata_key = "metadata/class_distribution.json"
 bucket = "mlops-sentiment-analysis-data"
 
@@ -54,37 +57,49 @@ logger.info(f"📊 Class distribution after dropping 3-star: {class_counts}")
 # -------------------------------------------
 positive_df = df_labeled.filter(col("label") == 1)
 negative_df = df_labeled.filter(col("label") == 0)
-
-pos_count = positive_df.count()
-neg_count = negative_df.count()
-min_class_count = min(pos_count, neg_count, 25000)
-
+min_class_count = min(positive_df.count(), negative_df.count(), 25000)
 logger.info(f"📦 Sampling {min_class_count} from each class")
 
 positive_sample = positive_df.orderBy(rand()).limit(min_class_count)
 negative_sample = negative_df.orderBy(rand()).limit(min_class_count)
-
 df_sampled = positive_sample.union(negative_sample).orderBy(rand())
 
 # -------------------------------------------
-# Save as Parquet (Bronze Layer)
+# Save Parquet (Bronze Layer)
 # -------------------------------------------
 df_sampled.write.mode("overwrite").parquet(parquet_output_path)
 logger.info(f"✅ Parquet training data saved to: {parquet_output_path}")
 
 # -------------------------------------------
-# Save as CSV (Silver Layer)
+# Write sampled DataFrame to a single CSV file (Silver Layer)
 # -------------------------------------------
-df_sampled.select("review_body", "label").write \
-    .option("header", True) \
-    .mode("overwrite") \
-    .csv(csv_output_path)
-logger.info(f"✅ CSV training data saved to: {csv_output_path}")
+df_sampled.select("review_body", "label") \
+    .coalesce(1) \
+    .write.option("header", True).mode("overwrite").csv(temp_csv_output_path)
+
+logger.info(f"📁 Temporary single-part CSV written to: {temp_csv_output_path}")
 
 # -------------------------------------------
-# Save metadata to S3
+# Rename and move to final destination
 # -------------------------------------------
 s3 = boto3.client("s3")
+objects = s3.list_objects_v2(Bucket=bucket, Prefix="tmp/sampled_temp_csv/")
+for obj in objects.get("Contents", []):
+    key = obj["Key"]
+    if re.search(r"part-.*\.csv$", key):
+        copy_source = {'Bucket': bucket, 'Key': key}
+        s3.copy_object(Bucket=bucket, CopySource=copy_source, Key=final_csv_key)
+        logger.info(f"✅ Moved final CSV to: s3://{bucket}/{final_csv_key}")
+        break
+
+# Clean up temp files
+for obj in objects.get("Contents", []):
+    s3.delete_object(Bucket=bucket, Key=obj["Key"])
+logger.info("🧹 Cleaned up temporary CSV files")
+
+# -------------------------------------------
+# Save metadata
+# -------------------------------------------
 class_meta = {
     "dropped_3_star_reviews": dropped_3_star,
     "original_class_distribution": class_counts,
