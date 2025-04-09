@@ -1,23 +1,29 @@
-from sagemaker.huggingface import HuggingFace
+from sagemaker.huggingface import HuggingFace, TrainingCompilerConfig
 import sagemaker
 
+# Get the SageMaker execution role
 role = sagemaker.get_execution_role()
 
-# Define the Hugging Face estimator
+# HuggingFace Estimator with Training Compiler
 huggingface_estimator = HuggingFace(
     entry_point="train.py",
-    source_dir=".",  # Current directory contains train.py
-    instance_type="ml.t3.medium",
+    source_dir=".",
+    instance_type="ml.g4dn.xlarge",
     instance_count=1,
     role=role,
-    transformers_version="4.26",
-    pytorch_version="1.13",
-    py_version="py39",
-    output_path="s3://mlops-sentiment-analysis-data/Silver/",
-    base_job_name="distilbert-sentiment"
+    transformers_version="4.17.0",
+    pytorch_version="1.10.2",
+    py_version="py38",
+    hyperparameters={
+        "epochs": 2,
+        "train_batch_size": 16
+    },
+    compiler_config=TrainingCompilerConfig(enabled=True),
+    base_job_name="distilbert-sentiment-optimized",
+    output_path="s3://mlops-sentiment-analysis-data/models/",
 )
 
-# Trigger the training
+# Launch training job
 huggingface_estimator.fit({
-    "train": "s3://mlops-sentiment-analysis-data/Silver/sampled.csv"
+    "train": "s3://mlops-sentiment-analysis-data/Silver"
 })

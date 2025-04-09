@@ -1,116 +1,95 @@
 import os
+import glob
 import logging
 import pandas as pd
-import mlflow
-import mlflow.transformers
 from datasets import Dataset
 from transformers import (
     DistilBertTokenizerFast,
     DistilBertForSequenceClassification,
+    Trainer,
     TrainingArguments,
-    Trainer
 )
-from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-# ---------------------------
-# ✅ Logging Setup
-# ---------------------------
+# ✅ Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------------------------
-# ✅ Environment Vars (SageMaker)
-# ---------------------------
+# ✅ SageMaker environment variables
 model_dir = os.environ.get("SM_MODEL_DIR", "./model")
-train_file = os.environ.get("SM_CHANNEL_TRAIN", "./sampled.csv")
+train_dir = os.environ.get("SM_CHANNEL_TRAIN", "/opt/ml/input/data/train")
 
-# ---------------------------
-# ✅ Load Data
-# ---------------------------
-logger.info(f"📥 Loading training data from: {train_file}")
-df = pd.read_csv(os.path.join(train_file, "sampled.csv")).dropna()
+# ✅ Locate CSV file in training directory
+csv_files = glob.glob(os.path.join(train_dir, "*.csv"))
+if not csv_files:
+    raise FileNotFoundError(f"No CSV files found in {train_dir}")
+csv_path = csv_files[0]
+logger.info(f"✅ Found training CSV file: {csv_path}")
+
+# ✅ Load and preprocess dataset
+df = pd.read_csv(csv_path).dropna()
 df = df.rename(columns={"review_body": "text", "label": "label"})
+
+# ✅ Split into train/test using Hugging Face datasets
 dataset = Dataset.from_pandas(df).train_test_split(test_size=0.1)
 
-# ---------------------------
-# ✅ Tokenization
-# ---------------------------
+# ✅ Load tokenizer and tokenize dataset
 tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
 
-def tokenize(batch):
-    return tokenizer(batch["text"], padding="max_length", truncation=True)
+def tokenize(example):
+    return tokenizer(example["text"], padding="max_length", truncation=True)
 
-tokenized = dataset.map(tokenize, batched=True)
-tokenized.set_format("torch", columns=["input_ids", "attention_mask", "label"])
+encoded_dataset = dataset.map(tokenize, batched=True)
+encoded_dataset.set_format("torch", columns=["input_ids", "attention_mask", "label"])
 
-# ---------------------------
-# ✅ Load Model
-# ---------------------------
-model = DistilBertForSequenceClassification.from_pretrained("distilbert-base-uncased", num_labels=2)
+# ✅ Load model with updated initialization
+model = DistilBertForSequenceClassification.from_pretrained(
+    "distilbert-base-uncased",
+    num_labels=2,
+    attention_dropout=0.1,  # Added for better regularization
+    torch_dtype="auto"  # Auto mixed precision
+)
 
-# ---------------------------
-# ✅ Evaluation Metrics
-# ---------------------------
+# ✅ Define metrics with zero_division parameter
 def compute_metrics(p):
-    preds = p.predictions.argmax(axis=1)
+    preds = p.predictions.argmax(-1)
     labels = p.label_ids
     return {
         "accuracy": accuracy_score(labels, preds),
-        "f1": f1_score(labels, preds),
-        "precision": precision_score(labels, preds),
-        "recall": recall_score(labels, preds)
+        "precision": precision_score(labels, preds, zero_division=0),
+        "recall": recall_score(labels, preds, zero_division=0),
+        "f1": f1_score(labels, preds, zero_division=0),
     }
 
-# ---------------------------
-# ✅ Training Config
-# ---------------------------
+# ✅ Updated training arguments with mixed precision
 training_args = TrainingArguments(
     output_dir=model_dir,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
     num_train_epochs=2,
     per_device_train_batch_size=16,
     per_device_eval_batch_size=16,
-    evaluation_strategy="epoch",
-    save_strategy="epoch",
     logging_dir="./logs",
     logging_steps=10,
-    report_to="none"
+    fp16=True,  # Enable mixed precision training
+    load_best_model_at_end=True,
+    metric_for_best_model="f1",
 )
 
-# ---------------------------
-# ✅ MLflow Tracking
-# ---------------------------
-mlflow.set_tracking_uri("http://127.0.0.1:5000")  # OR your remote MLflow tracking server
-mlflow.set_experiment("distilbert-sentiment")
+# ✅ Start Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=encoded_dataset["train"],
+    eval_dataset=encoded_dataset["test"],
+    tokenizer=tokenizer,
+    compute_metrics=compute_metrics,
+)
 
-with mlflow.start_run():
-    logger.info("🚀 Starting training with MLflow tracking")
+logger.info("🚀 Starting training...")
+trainer.train()
 
-    # Log hyperparameters
-    mlflow.log_params({
-        "model": "distilbert-base-uncased",
-        "epochs": training_args.num_train_epochs,
-        "train_batch_size": training_args.per_device_train_batch_size,
-    })
-
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=tokenized["train"],
-        eval_dataset=tokenized["test"],
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics
-    )
-
-    trainer.train()
-    metrics = trainer.evaluate()
-    logger.info(f"📊 Evaluation metrics: {metrics}")
-
-    # Log metrics to MLflow
-    mlflow.log_metrics(metrics)
-
-    # Save & log model
-    trainer.save_model(model_dir)
-    tokenizer.save_pretrained(model_dir)
-    mlflow.transformers.log_model(transformers_model=model, artifact_path="model", tokenizer=tokenizer)
-
-    logger.info("✅ Training complete and model logged to MLflow.")
+# ✅ Save model and tokenizer
+trainer.save_model(model_dir)
+tokenizer.save_pretrained(model_dir)
+logger.info(f"✅ Model and tokenizer saved to {model_dir}")
