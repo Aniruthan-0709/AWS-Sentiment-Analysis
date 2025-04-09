@@ -5,7 +5,8 @@ import logging
 import re
 from pyspark.context import SparkContext
 from awsglue.context import GlueContext
-from pyspark.sql.functions import col, when, rand
+from pyspark.sql.functions import col, when, rand, regexp_replace
+from pyspark.sql.types import IntegerType
 
 # -------------------------------------------
 # Logging Setup
@@ -27,20 +28,27 @@ input_path = "s3://mlops-sentiment-analysis-data/Bronze/anomaly_flagged.parquet"
 parquet_output_path = "s3://mlops-sentiment-analysis-data/Bronze/train_final.parquet"
 temp_csv_output_path = "s3://mlops-sentiment-analysis-data/tmp/sampled_temp_csv"
 final_csv_key = "Silver/sampled.csv"
+remaining_data_output_path = "s3://mlops-sentiment-analysis-data/test/anomaly_data_remaining.parquet"
 metadata_key = "metadata/class_distribution.json"
 bucket = "mlops-sentiment-analysis-data"
 
 # -------------------------------------------
-# Load anomaly-flagged data
+# Load data
 # -------------------------------------------
 df = spark.read.parquet(input_path)
 logger.info(f"📥 Loaded anomaly-flagged dataset from: {input_path}")
 
 # -------------------------------------------
-# Filter out 3-star reviews and add binary label
+# Drop neutral reviews and assign binary label
 # -------------------------------------------
 df_filtered = df.filter((col("star_rating").isNotNull()) & (col("star_rating") != 3))
 df_labeled = df_filtered.withColumn("label", when(col("star_rating") > 3, 1).otherwise(0))
+
+# Ensure label is integer
+df_labeled = df_labeled.withColumn("label", col("label").cast(IntegerType()))
+
+# Clean review_body (remove line breaks)
+df_labeled = df_labeled.withColumn("review_body", regexp_replace(col("review_body"), r'[\r\n]+', ' '))
 
 dropped_3_star = df.count() - df_labeled.count()
 logger.info(f"🗑️ Dropped {dropped_3_star} neutral (3-star) reviews")
@@ -65,22 +73,38 @@ negative_sample = negative_df.orderBy(rand()).limit(min_class_count)
 df_sampled = positive_sample.union(negative_sample).orderBy(rand())
 
 # -------------------------------------------
-# Save Parquet (Bronze Layer)
+# Identify and Save Remaining Data
+# -------------------------------------------
+# Create sampled IDs to exclude from original
+sampled_ids_df = df_sampled.select("review_body").withColumnRenamed("review_body", "sample_key")
+full_ids_df = df_labeled.withColumnRenamed("review_body", "sample_key")
+
+remaining_df = full_ids_df.join(sampled_ids_df, on="sample_key", how="left_anti").withColumnRenamed("sample_key", "review_body")
+
+# Save the remaining records to test set
+remaining_df.write.mode("overwrite").parquet(remaining_data_output_path)
+logger.info(f"🧪 Remaining {remaining_df.count()} records saved to: {remaining_data_output_path}")
+
+# -------------------------------------------
+# Save sampled dataset to Parquet
 # -------------------------------------------
 df_sampled.write.mode("overwrite").parquet(parquet_output_path)
 logger.info(f"✅ Parquet training data saved to: {parquet_output_path}")
 
 # -------------------------------------------
-# Write sampled DataFrame to a single CSV file (Silver Layer)
+# Write to single CSV (clean + properly quoted)
 # -------------------------------------------
 df_sampled.select("review_body", "label") \
     .coalesce(1) \
-    .write.option("header", True).mode("overwrite").csv(temp_csv_output_path)
-
+    .write.option("header", True) \
+    .option("quote", '"') \
+    .option("escape", '"') \
+    .mode("overwrite") \
+    .csv(temp_csv_output_path)
 logger.info(f"📁 Temporary single-part CSV written to: {temp_csv_output_path}")
 
 # -------------------------------------------
-# Rename and move to final destination
+# Rename and move to Silver layer
 # -------------------------------------------
 s3 = boto3.client("s3")
 objects = s3.list_objects_v2(Bucket=bucket, Prefix="tmp/sampled_temp_csv/")
@@ -106,7 +130,8 @@ class_meta = {
     "sampled_class_counts": {
         "positive": min_class_count,
         "negative": min_class_count
-    }
+    },
+    "remaining_after_sampling": remaining_df.count()
 }
 s3.put_object(
     Bucket=bucket,
