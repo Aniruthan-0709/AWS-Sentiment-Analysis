@@ -1,26 +1,35 @@
 import os
 import boto3
+from dotenv import load_dotenv
 
-# Environment configurations (can be moved to a .env file)
-ECS_CLUSTER = os.getenv("ECS_CLUSTER", "default")
-ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION", "default")
-SUBNET_ID = os.getenv("SUBNET_ID", "default")
-SECURITY_GROUP_ID = os.getenv("SECURITY_GROUP_ID", "default")
-BUCKET_NAME = os.getenv("BUCKET_NAME", "default")
+# --------------------------------------
+# ✅ Load environment variables from .env
+# --------------------------------------
+load_dotenv()
 
-# Initialize ECS client
-ecs_client = boto3.client("ecs")
+ECS_CLUSTER = os.getenv("ECS_CLUSTER")
+ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION")
+SUBNET_ID = os.getenv("SUBNET_ID")
+SECURITY_GROUP_ID = os.getenv("SECURITY_GROUP_ID")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
 
-def trigger_ecs_task(filename: str, user: str = ""):
-    # Fallback: if user is empty, use raw/test.csv
-    if user.strip():
-        raw_key = f"raw/{user}/{filename}"
-        user_for_env = user
-    else:
-        raw_key = f"raw/{filename}"
-        user_for_env = "default"
+ecs_client = boto3.client("ecs", region_name="us-east-1")
 
-    # Launch the ECS Fargate task
+def trigger_ecs_task(filename: str, user: str = "") -> str:
+    user_for_env = user.strip() or "default"
+
+    print("🧪 DEBUG:")
+    print(f"   ▶ ECS_CLUSTER     = {ECS_CLUSTER}")
+    print(f"   ▶ TASK_DEFINITION = {ECS_TASK_DEFINITION}")
+    print(f"   ▶ USER_NAME       = {user_for_env}")
+    print(f"   ▶ FILENAME        = {filename}")
+
+    try:
+        describe = ecs_client.describe_clusters(clusters=[ECS_CLUSTER])
+        print(f"   🔍 Cluster status: {describe['clusters'][0]['status']}")
+    except Exception as e:
+        raise RuntimeError(f"Cluster '{ECS_CLUSTER}' not found: {e}")
+
     response = ecs_client.run_task(
         cluster=ECS_CLUSTER,
         launchType="FARGATE",
@@ -40,7 +49,6 @@ def trigger_ecs_task(filename: str, user: str = ""):
                     "name": "sentiment-cleaner",
                     "environment": [
                         {"name": "BUCKET_NAME", "value": BUCKET_NAME},
-                        {"name": "RAW_KEY", "value": raw_key},
                         {"name": "USER_NAME", "value": user_for_env},
                         {"name": "FILENAME", "value": filename}
                     ]
@@ -49,9 +57,11 @@ def trigger_ecs_task(filename: str, user: str = ""):
         }
     )
 
-    # Validate task was launched
     tasks = response.get("tasks", [])
     if not tasks:
-        raise Exception("❌ ECS task failed to launch")
+        print("❌ Task launch failed:", response)
+        raise Exception("ECS task failed to launch")
 
-    return tasks[0]["taskArn"]
+    task_arn = tasks[0]["taskArn"]
+    print(f"🚀 Task started successfully: {task_arn}")
+    return task_arn
