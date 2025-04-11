@@ -118,3 +118,4 @@ s3.put_object(
 )
 
 print("✅ Preprocessing complete.")
+cd ..

@@ -1,19 +1,26 @@
 import os
 import boto3
-import uuid
 
-# 🔧 You can move these to a .env later
+# Environment configurations (can be moved to a .env file)
 ECS_CLUSTER = os.getenv("ECS_CLUSTER", "default")
-ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION", "sentiment-cleaner-task:1")
-SUBNET_ID = os.getenv("SUBNET_ID", "subnet-061495d7090433d6f")
-SECURITY_GROUP_ID = os.getenv("SECURITY_GROUP_ID", "sg-0817514159f510735")
-BUCKET_NAME = os.getenv("BUCKET_NAME", "mlops-sentiment-app")
+ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION", "default")
+SUBNET_ID = os.getenv("SUBNET_ID", "default")
+SECURITY_GROUP_ID = os.getenv("SECURITY_GROUP_ID", "default")
+BUCKET_NAME = os.getenv("BUCKET_NAME", "default")
 
+# Initialize ECS client
 ecs_client = boto3.client("ecs")
 
-def trigger_ecs_task(filename: str, user: str):
-    raw_key = f"raw/{user}/{filename}"
+def trigger_ecs_task(filename: str, user: str = ""):
+    # Fallback: if user is empty, use raw/test.csv
+    if user.strip():
+        raw_key = f"raw/{user}/{filename}"
+        user_for_env = user
+    else:
+        raw_key = f"raw/{filename}"
+        user_for_env = "default"
 
+    # Launch the ECS Fargate task
     response = ecs_client.run_task(
         cluster=ECS_CLUSTER,
         launchType="FARGATE",
@@ -34,15 +41,17 @@ def trigger_ecs_task(filename: str, user: str):
                     "environment": [
                         {"name": "BUCKET_NAME", "value": BUCKET_NAME},
                         {"name": "RAW_KEY", "value": raw_key},
-                        {"name": "USER_NAME", "value": user}
+                        {"name": "USER_NAME", "value": user_for_env},
+                        {"name": "FILENAME", "value": filename}
                     ]
                 }
             ]
         }
     )
 
+    # Validate task was launched
     tasks = response.get("tasks", [])
     if not tasks:
-        raise Exception("ECS task failed to launch")
+        raise Exception("❌ ECS task failed to launch")
 
     return tasks[0]["taskArn"]
