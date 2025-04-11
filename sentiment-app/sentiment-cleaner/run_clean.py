@@ -82,20 +82,19 @@ def is_short(text):
 is_short_udf = udf(is_short, BooleanType())
 df_flagged = df_filtered.withColumn("short_review", is_short_udf(col("review_clean")))
 
-# ✅ Count too-short reviews
 short_count = df_flagged.filter(col("short_review")).count()
 print(f"⚠️ Flagged too-short reviews (<5 words or <30 chars): {short_count}")
 
 # -----------------------------------------
-# 💾 Save Dropped Rows
+# 💾 Save Dropped Rows (single file)
 df_dropped_null = df.filter(col("review_clean").isNull() | (length(col("review_clean")) == 0))
 df_dropped_numeric = df.filter(col("review_clean").rlike("^[0-9\\s]+$"))
 df_dropped = df_dropped_null.union(df_dropped_numeric)
-df_dropped.write.mode("overwrite").option("header", True).csv(output_dropped)
+df_dropped.coalesce(1).write.mode("overwrite").option("header", True).csv(output_dropped)
 
 # -----------------------------------------
-# 💾 Save Cleaned Reviews
-df_flagged.write.mode("overwrite").option("header", True).csv(output_cleaned)
+# 💾 Save Cleaned Reviews (single file)
+df_flagged.coalesce(1).write.mode("overwrite").option("header", True).csv(output_cleaned)
 
 # -----------------------------------------
 # 📊 Save Summary to S3
