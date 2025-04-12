@@ -10,3 +10,4 @@ requests==2.31.0
 
 # --- Optional for JSON preview, pandas if needed ---
 pandas==2.2.2
+matplotlib

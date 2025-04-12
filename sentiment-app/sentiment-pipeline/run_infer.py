@@ -38,12 +38,11 @@ print("📂 Extracting model...")
 with tarfile.open(local_tar, "r:gz") as tar:
     tar.extractall(path=local_model_dir)
 
-model_path = os.path.join(local_model_dir, "distilbert_model")
-print(f"🧠 Loading model from {model_path}...")
+# --- Step 3: Load model + tokenizer from /tmp/model ---
+print(f"🧠 Loading model from {local_model_dir}...")
+tokenizer = AutoTokenizer.from_pretrained(local_model_dir, local_files_only=True)
+model = AutoModelForSequenceClassification.from_pretrained(local_model_dir, local_files_only=True)
 
-# --- Step 3: Load tokenizer and model ---
-tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
 pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
 
 # --- Step 4: Run inference ---

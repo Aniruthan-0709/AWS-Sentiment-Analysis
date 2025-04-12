@@ -53,8 +53,11 @@ def trigger_pipeline(req: PreprocessRequest):
 def generate_dashboard_api(req: PreprocessRequest):
     try:
         print(f"📊 Attempting dashboard generation for {req.user}/{req.filename}")
-        generate_dashboard(req.user, req.filename)
+        generate_dashboard(req.user, req.filename)  # your existing logic
         return {"status": "dashboard_generated"}
+    except FileNotFoundError as e:
+        print(f"❌ Dashboard generation failed (missing file): {e}")
+        raise HTTPException(status_code=404, detail="Required files not found for dashboard.")
     except Exception as e:
         print(f"❌ Error in /generate_dashboard: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error during dashboard generation.")
