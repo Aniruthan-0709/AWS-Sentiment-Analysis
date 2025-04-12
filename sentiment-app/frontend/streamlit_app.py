@@ -28,8 +28,9 @@ def login():
                 st.session_state["user"] = username
                 st.session_state["tokens"] = response.json()["tokens"]
 
-                # ✅ Immediately redirect to upload page
-                st.switch_page("frontend/upload_and_trigger.py")
+                # ✅ Redirect to multipage-compatible upload page
+                st.switch_page("pages/upload_and_trigger.py")
+
             else:
                 st.error("❌ Login failed. Check credentials.")
         except Exception as e:
@@ -39,5 +40,6 @@ def login():
 if "user" not in st.session_state:
     login()
 else:
-    # Already logged in — go directly to upload page
-    st.switch_page("frontend/upload_and_trigger.py")
+    # Already logged in — redirect
+    st.switch_page("pages/upload_and_trigger.py")
+

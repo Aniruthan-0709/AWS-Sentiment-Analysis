@@ -11,7 +11,7 @@ s3_resource = boto3.resource("s3")
 new_bucket = "mlops-sentiment-app"
 source_bucket = "mlops-sentiment-analysis-data"
 source_model_prefix = "models/"
-dest_model_key = "sentiment-app/models/model.tar.gz"
+dest_model_key = "models/model.tar.gz"
 
 folders = [
     "uploads/raw/",
@@ -19,7 +19,7 @@ folders = [
     "processed/cleaned/",
     "processed/tested/",
     "models/",
-    "sentiment-app/models/",
+    "models/",
     "metadata/",
     "tmp/"
 ]
