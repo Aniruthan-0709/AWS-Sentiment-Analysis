@@ -2,16 +2,24 @@ import os
 import boto3
 import json
 import pandas as pd
+import datetime
 from io import StringIO
+from dotenv import load_dotenv
 
-# ✅ Hardcoded config values
-ECS_CLUSTER = "default"
-ECS_TASK_DEFINITION = "sentiment-cleaner-task"
-SUBNET_ID = "subnet-061495d7090433d6f"
-SECURITY_GROUP_ID = "sg-0817514159f510735"
-BUCKET_NAME = "mlops-sentiment-app"
+# ---------------------------
+# Load environment variables
+# ---------------------------
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
 
-# 🐛 Debug
+ECS_CLUSTER = os.getenv("ECS_CLUSTER")
+ECS_TASK_DEFINITION = os.getenv("ECS_TASK_DEFINITION_ARN")  # Full ARN
+SUBNET_ID = os.getenv("SUBNET_ID")
+SECURITY_GROUP_ID = os.getenv("SECURITY_GROUP_ID")
+BUCKET_NAME = os.getenv("BUCKET_NAME")
+
+# ---------------------------
+# Debug log
+# ---------------------------
 print("🐛 CONFIG VALUES:")
 print(f"   ECS_CLUSTER         = {ECS_CLUSTER}")
 print(f"   ECS_TASK_DEFINITION = {ECS_TASK_DEFINITION}")
@@ -22,39 +30,58 @@ print(f"   BUCKET_NAME         = {BUCKET_NAME}")
 ecs_client = boto3.client("ecs", region_name="us-east-1")
 s3 = boto3.client("s3")
 
+# ---------------------------
+# ECS Pipeline Trigger
+# ---------------------------
 def trigger_ecs_pipeline(filename: str, user: str):
-    ECS_TASK_DEFINITION = "arn:aws:ecs:us-east-1:593026487135:task-definition/sentiment-cleaner-task:1"
-    print(f"🚀 Launching ECS task for user={user}, file={filename}")
-    print(f"🛠 Using task definition: {ECS_TASK_DEFINITION}")
+    global ECS_TASK_DEFINITION
+    print("✅ Inside trigger_ecs_pipeline", flush=True)
+    print("   filename:", filename, "user:", user, flush=True)
+    print("   ECS_TASK_DEFINITION =", ECS_TASK_DEFINITION, flush=True)
 
-    response = ecs_client.run_task(
-        cluster="default",
-        launchType="FARGATE",
-        taskDefinition=ECS_TASK_DEFINITION,
-        count=1,
-        platformVersion="LATEST",
-        networkConfiguration={
-            "awsvpcConfiguration": {
-                "subnets": ["subnet-061495d7090433d6f"],
-                "securityGroups": ["sg-0817514159f510735"],
-                "assignPublicIp": "ENABLED"
-            }
-        },
-        overrides={
-            "containerOverrides": [
-                {
-                    "name": "sentiment-pipeline",  # Your ECS container name
-                    "environment": [
-                        {"name": "BUCKET_NAME", "value": BUCKET_NAME},
-                        {"name": "USER_NAME", "value": user},
-                        {"name": "FILENAME", "value": filename}
-                    ]
+    def json_fallback(o):
+        if isinstance(o, (datetime.datetime, datetime.date)):
+            return o.isoformat()
+        return str(o)
+
+    try:
+        response = ecs_client.run_task(
+            cluster=ECS_CLUSTER,
+            launchType="FARGATE",
+            taskDefinition=ECS_TASK_DEFINITION,
+            count=1,
+            platformVersion="LATEST",
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "subnets": [SUBNET_ID],
+                    "securityGroups": [SECURITY_GROUP_ID],
+                    "assignPublicIp": "ENABLED"
                 }
-            ]
-        }
-    )
+            },
+            overrides={
+                "containerOverrides": [
+                    {
+                        "name": "sentiment-pipeline",  # ECS container name
+                        "environment": [
+                            {"name": "BUCKET_NAME", "value": BUCKET_NAME},
+                            {"name": "USER_NAME", "value": user},
+                            {"name": "FILENAME", "value": filename}
+                        ]
+                    }
+                ]
+            }
+        )
 
+        print("🧾 ECS RunTask response:")
+        print(json.dumps(response, indent=2, default=json_fallback))
+        return response
+    except Exception as e:
+        print(f"❌ Failed to trigger ECS task: {e}")
+        return None
 
+# ---------------------------
+# Dashboard Generation
+# ---------------------------
 def generate_dashboard(user: str, filename: str):
     output_key = f"output/{user}/served.csv"
     metadata_key = f"metadata/{user}/inference_summary.json"

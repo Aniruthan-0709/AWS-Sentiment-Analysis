@@ -5,16 +5,17 @@ from backend.utils import trigger_ecs_pipeline, generate_dashboard
 from dotenv import load_dotenv
 import os
 
-# ✅ Load .env from backend directory
+# ✅ Load .env
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(dotenv_path=env_path)
 
 print("✅ FastAPI loaded with:")
 print("   - COGNITO_CLIENT_ID =", os.getenv("COGNITO_CLIENT_ID"))
-print("   - ECS_TASK_DEFINITION =", os.getenv("ECS_TASK_DEFINITION"))
+print("   - ECS_TASK_DEFINITION =", os.getenv("ECS_TASK_DEFINITION_ARN"))
 
 app = FastAPI()
 
+# 🔐 Login Request
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -29,6 +30,8 @@ def login_user(req: LoginRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# 🚀 Trigger ECS Task
 class PreprocessRequest(BaseModel):
     filename: str
     user: str
@@ -36,8 +39,22 @@ class PreprocessRequest(BaseModel):
 @app.post("/trigger_pipeline")
 def trigger_pipeline(req: PreprocessRequest):
     try:
+        print(f"📩 Received pipeline trigger for user={req.user}, file={req.filename}")
         task_arn = trigger_ecs_pipeline(req.filename, req.user)
-        generate_dashboard(req.user, req.filename)
+        print(f"📦 ECS Task Triggered: {task_arn}")
         return {"status": "pipeline_triggered", "task_arn": task_arn}
     except Exception as e:
+        print(f"❌ Error in /trigger_pipeline: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 📊 Generate Dashboard After ECS Completion
+@app.post("/generate_dashboard")
+def generate_dashboard_api(req: PreprocessRequest):
+    try:
+        print(f"📊 Attempting dashboard generation for {req.user}/{req.filename}")
+        generate_dashboard(req.user, req.filename)
+        return {"status": "dashboard_generated"}
+    except Exception as e:
+        print(f"❌ Error in /generate_dashboard: {e}")
         raise HTTPException(status_code=500, detail=str(e))

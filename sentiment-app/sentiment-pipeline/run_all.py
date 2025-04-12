@@ -1,21 +1,46 @@
+import os
+import boto3
+import json
 import subprocess
-import sys
 
-def run_script(name):
-    print(f"🔄 Running: {name}")
-    result = subprocess.run(["python", name])
+# -------------------------------------
+# Environment
+# -------------------------------------
+bucket = os.environ.get("BUCKET_NAME")
+user = os.environ.get("USER_NAME")
+status_key = f"metadata/{user}/pipeline_status.json"
 
-    if result.returncode != 0:
-        print(f"❌ {name} failed. Exiting...")
-        sys.exit(result.returncode)
+s3 = boto3.client("s3")
 
-if __name__ == "__main__":
-    print("🚀 Starting Sentiment Pipeline ECS Job")
-    
-    run_script("run_clean.py")
-    print("✅ Preprocessing complete.")
+# -------------------------------------
+# Update status to running
+# -------------------------------------
+s3.put_object(
+    Bucket=bucket,
+    Key=status_key,
+    Body=json.dumps({"status": "running"}),
+    ContentType="application/json"
+)
+print("🚀 Pipeline status set to: running")
 
-    run_script("run_infer.py")
-    print("✅ Inference complete.")
+# -------------------------------------
+# Run Clean + Inference
+# -------------------------------------
+try:
+    print("🧼 Running run_clean.py ...")
+    subprocess.run(["python", "run_clean.py"], check=True)
 
-    print("🎉 All steps completed successfully.")
+    print("🧠 Running run_infer.py ...")
+    subprocess.run(["python", "run_infer.py"], check=True)
+
+except subprocess.CalledProcessError as e:
+    print(f"❌ Pipeline failed: {e}")
+    s3.put_object(
+        Bucket=bucket,
+        Key=status_key,
+        Body=json.dumps({"status": "failed", "error": str(e)}),
+        ContentType="application/json"
+    )
+    raise
+
+print("✅ Full pipeline completed.")

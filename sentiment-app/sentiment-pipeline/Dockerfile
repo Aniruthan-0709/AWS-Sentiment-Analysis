@@ -3,21 +3,26 @@ FROM bitnami/spark:3.4.1
 # Switch to root to install Python packages
 USER root
 
-# Install Python dependencies
+# Install Python + ML + Hugging Face dependencies
 RUN pip install --no-cache-dir \
     boto3 \
     pandas \
     scikit-learn \
     joblib \
-    python-dotenv
+    python-dotenv \
+    pyspark \
+    transformers \
+    mlflow[extras] \
+    torch \
+    accelerate
 
 # Set working directory
 WORKDIR /app
 
-# Copy preprocessing and inference scripts
+# Copy pipeline scripts
 COPY run_clean.py .
 COPY run_infer.py .
 COPY run_all.py .
 
-# Run the full pipeline (clean + infer)
+# Default: run clean + inference together
 ENTRYPOINT ["python", "run_all.py"]

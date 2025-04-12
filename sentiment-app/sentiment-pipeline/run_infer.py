@@ -1,96 +1,100 @@
 import os
+import json
 import boto3
 import pandas as pd
 import tarfile
-import joblib
-import json
-from io import BytesIO
-from datetime import datetime
-from dotenv import load_dotenv
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
-# Load .env if running locally (optional)
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
-
-# 🔧 Environment Variables
-bucket = os.environ.get("BUCKET_NAME", "mlops-sentiment-app")
+# --- ENV VARIABLES ---
+bucket = os.environ.get("BUCKET_NAME")
 user = os.environ.get("USER_NAME")
-filename = "served.csv"
+filename = os.environ.get("FILENAME")
 
-if not user:
-    raise ValueError("❌ USER_NAME is not set.")
-
-# S3 paths
-input_key = f"processed/{user}/processed.csv"
-output_key = f"output/{user}/{filename}"
+# --- S3 Keys ---
+processed_key = f"processed/{user}/processed.csv"
+output_dir_key = f"output/{user}/served.csv"
+output_file_key = f"output/{user}/served.csv"
+status_key = f"metadata/{user}/pipeline_status.json"
 summary_key = f"metadata/{user}/inference_summary.json"
 model_key = "models/model.tar.gz"
 
+# --- S3 Client ---
 s3 = boto3.client("s3")
 
-# 📦 Load model from tar.gz
-def load_model():
-    obj = s3.get_object(Bucket=bucket, Key=model_key)
-    tar_bytes = BytesIO(obj['Body'].read())
+# --- Step 1: Download processed data ---
+print("📥 Downloading cleaned reviews...")
+obj = s3.get_object(Bucket=bucket, Key=processed_key)
+df = pd.read_csv(obj["Body"])
+texts = df["review_clean"].astype(str).tolist()
 
-    with tarfile.open(fileobj=tar_bytes, mode='r:gz') as tar:
-        model_file = [m for m in tar.getnames() if m.endswith(".pkl")][0]
-        extracted = tar.extractfile(model_file)
-        return joblib.load(extracted)
+# --- Step 2: Download and extract model ---
+print("📦 Downloading model from S3...")
+local_tar = "/tmp/model.tar.gz"
+local_model_dir = "/tmp/model"
 
-# 📥 Load processed data
-def load_processed_data():
-    obj = s3.get_object(Bucket=bucket, Key=input_key)
-    return pd.read_csv(obj['Body'])
+s3.download_file(bucket, model_key, local_tar)
 
-# 📊 Generate metrics summary
-def generate_summary(df_pred):
-    sentiment_counts = df_pred['predicted_label'].value_counts().to_dict()
-    avg_len = df_pred['review_clean'].apply(lambda x: len(str(x))).mean()
-    short_count = df_pred['short_review'].sum() if 'short_review' in df_pred.columns else 0
+print("📂 Extracting model...")
+with tarfile.open(local_tar, "r:gz") as tar:
+    tar.extractall(path=local_model_dir)
 
-    top_pos = df_pred[df_pred['predicted_label'] == 'positive'].nlargest(5, 'score', default=0)['review'].tolist()
-    top_neg = df_pred[df_pred['predicted_label'] == 'negative'].nlargest(5, 'score', default=0)['review'].tolist()
+model_path = os.path.join(local_model_dir, "distilbert_model")
+print(f"🧠 Loading model from {model_path}...")
 
-    return {
-        "positive_reviews": sentiment_counts.get("positive", 0),
-        "negative_reviews": sentiment_counts.get("negative", 0),
-        "short_reviews_flagged": int(short_count),
-        "average_length": round(avg_len, 2),
-        "top_positive": top_pos,
-        "top_negative": top_neg,
-        "timestamp": datetime.now().isoformat()
+# --- Step 3: Load tokenizer and model ---
+tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
+pipe = pipeline("text-classification", model=model, tokenizer=tokenizer)
+
+# --- Step 4: Run inference ---
+print("🚀 Running inference...")
+preds = pipe(texts, truncation=True, padding=True)
+
+# --- Step 5: Map predictions to labels ---
+label_map = {"LABEL_0": "negative", "LABEL_1": "positive"}
+df["prediction"] = [label_map.get(p["label"], "unknown") for p in preds]
+
+# --- Step 6: Upload served.csv ---
+tmp_csv_path = "/tmp/served.csv"
+df.to_csv(tmp_csv_path, index=False)
+
+s3.upload_file(tmp_csv_path, bucket, f"{output_dir_key}/part-00000.csv")
+s3.copy_object(Bucket=bucket, CopySource={'Bucket': bucket, 'Key': f"{output_dir_key}/part-00000.csv"}, Key=output_file_key)
+
+# Cleanup Spark-style folder
+response = s3.list_objects_v2(Bucket=bucket, Prefix=output_dir_key + "/")
+if "Contents" in response:
+    s3.delete_objects(Bucket=bucket, Delete={'Objects': [{'Key': obj["Key"]} for obj in response["Contents"]]})
+
+# --- Step 7: Upload dashboard summary ---
+try:
+    print("📊 Creating inference summary...")
+    summary = {
+        "total_reviews": len(df),
+        "positive_reviews": int((df["prediction"] == "positive").sum()),
+        "negative_reviews": int((df["prediction"] == "negative").sum()),
+        "neutral_reviews": int((df["prediction"] == "neutral").sum()) if "neutral" in df["prediction"].unique() else 0,
+        "average_review_length": round(df["review_clean"].astype(str).str.len().mean(), 2),
+        "short_reviews_flagged": int(df.get("short_review", pd.Series([False] * len(df))).sum()),
+        "top_positive_reviews": df[df["prediction"] == "positive"]["review_clean"].head(5).tolist(),
+        "top_negative_reviews": df[df["prediction"] == "negative"]["review_clean"].head(5).tolist()
     }
 
-# 🚀 Run inference
-def run_inference():
-    print(f"📥 Loading {input_key}...")
-    df = load_processed_data()
+    s3.put_object(
+        Bucket=bucket,
+        Key=summary_key,
+        Body=json.dumps(summary, indent=2),
+        ContentType="application/json"
+    )
+    print(f"✅ Dashboard summary saved to s3://{bucket}/{summary_key}")
+except Exception as e:
+    print(f"❌ Failed to create dashboard summary: {e}")
 
-    print("📦 Loading model...")
-    model = load_model()
-
-    print("🔮 Predicting sentiment...")
-    df["predicted_label"] = model.predict(df["review_clean"])
-
-    try:
-        df["score"] = model.predict_proba(df["review_clean"]).max(axis=1)
-    except:
-        df["score"] = 0.0
-
-    # Upload predictions
-    print(f"💾 Saving to {output_key}...")
-    csv_buffer = BytesIO()
-    df.to_csv(csv_buffer, index=False)
-    csv_buffer.seek(0)
-    s3.put_object(Bucket=bucket, Key=output_key, Body=csv_buffer.getvalue(), ContentType="text/csv")
-
-    # Upload summary
-    print(f"📊 Saving metrics to {summary_key}...")
-    summary = generate_summary(df)
-    s3.put_object(Bucket=bucket, Key=summary_key, Body=json.dumps(summary, indent=2), ContentType="application/json")
-
-    print("✅ Inference complete.")
-
-# 🔁 Entry point
-if __name__ == "__main__":
-    run_inference()
+# --- Step 8: Mark pipeline as complete ---
+s3.put_object(
+    Bucket=bucket,
+    Key=status_key,
+    Body=json.dumps({"status": "inference_complete"}),
+    ContentType="application/json"
+)
+print("✅ Inference complete.")
