@@ -1,9 +1,10 @@
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:8000"  # Backend FastAPI URL
+API_URL = "http://localhost:8000"  # URL of your FastAPI backend
 
 def login():
+    st.set_page_config(page_title="Login | Sentiment App", page_icon="🔐")
     st.title("🔐 Login to Sentiment Analysis App")
 
     username = st.text_input("Username")
@@ -28,18 +29,17 @@ def login():
                 st.session_state["user"] = username
                 st.session_state["tokens"] = response.json()["tokens"]
 
-                # ✅ Redirect to multipage-compatible upload page
+                # ✅ Redirect to Streamlit multipage app
                 st.switch_page("pages/upload_and_trigger.py")
 
             else:
-                st.error("❌ Login failed. Check credentials.")
+                st.error("❌ Login failed. Check your credentials.")
         except Exception as e:
             st.error(f"🚨 Request failed: {e}")
 
-# 👇 Page logic
+# 👇 Main logic
 if "user" not in st.session_state:
     login()
 else:
-    # Already logged in — redirect
+    # Already logged in — skip login and go to main upload page
     st.switch_page("pages/upload_and_trigger.py")
-
