@@ -36,39 +36,51 @@ def run_remote_commands(public_ip):
     key = paramiko.RSAKey.from_private_key_file(KEY_PATH)
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(hostname=public_ip, username=USERNAME, pkey=key)
 
+    # Wait for SSH connection
+    connected = False
+    while not connected:
+        try:
+            ssh.connect(hostname=public_ip, username=USERNAME, pkey=key)
+            connected = True
+        except Exception:
+            print("⏳ Waiting for SSH to be ready...")
+            time.sleep(10)
+
+    print("✅ SSH connection established.")
+
+    # === COMMANDS ===
     commands = [
-        # Clone the repo
-        f"cd ~ && git clone https://github.com/Aniruthan-0709/{REPO_NAME}.git || echo 'Repo already cloned'",
+        f"cd ~ && rm -rf {REPO_NAME} && git clone https://github.com/Aniruthan-0709/{REPO_NAME}.git",
 
-        # Create virtualenv and install requirements from root
         f"cd {REPO_NAME} && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt",
 
-        # Start FastAPI from sentiment-app/backend
         f"cd {REPO_NAME}/sentiment-app/backend && nohup ../../venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 &",
 
-        # Start Streamlit from sentiment-app/frontend
-        f"cd {REPO_NAME}/sentiment-app/frontend && nohup ../../venv/bin/streamlit run app.py --server.address 0.0.0.0 --server.port 8501 &"
+        f"cd {REPO_NAME}/sentiment-app/frontend && nohup ../../venv/bin/streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501 &"
     ]
 
     for cmd in commands:
-        print(f"
-⚙️ Running: {cmd}")
-        stdin, stdout, stderr = ssh.exec_command(cmd)
-        print(stdout.read().decode())
-        print(stderr.read().decode())
+        print(f"\n⚙️ Running: {cmd}")
+        stdin, stdout, stderr = ssh.exec_command(cmd, get_pty=True)
+
+        for line in iter(stdout.readline, ""):
+            print(line, end="")
+
+        error = stderr.read().decode()
+        if error:
+            print(f"\n❌ STDERR:\n{error}")
 
     ssh.close()
-    print("🚀 App successfully deployed.")
+    print("\n🚀 App successfully deployed.")
 
 def health_check(public_ip):
-    print("
-🧪 Performing health checks...")
+    print("\n🧪 Performing health checks...")
     endpoints = {
         "FastAPI": f"http://{public_ip}:8000/docs",
         "Streamlit": f"http://{public_ip}:8501"
     }
+
     for name, url in endpoints.items():
         try:
             r = requests.get(url, timeout=5)
@@ -81,8 +93,8 @@ def health_check(public_ip):
 
 if __name__ == "__main__":
     start_instance()
-    time.sleep(30)
+    time.sleep(30)  # Let EC2 boot fully
     public_ip = get_public_ip()
     run_remote_commands(public_ip)
-    time.sleep(10)
+    time.sleep(15)  # Let services start
     health_check(public_ip)
