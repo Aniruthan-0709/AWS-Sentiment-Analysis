@@ -11,7 +11,7 @@ REPO_NAME = 'AWS-Sentiment-Analysis'
 USERNAME = 'ec2-user'
 REGION = 'us-east-1'
 
-# === KEY FILE CHECK ===
+# === CHECK KEY FILE ===
 with open(KEY_PATH, 'r') as f:
     print("✅ Key file loaded successfully!")
 
@@ -39,14 +39,22 @@ def run_remote_commands(public_ip):
     ssh.connect(hostname=public_ip, username=USERNAME, pkey=key)
 
     commands = [
+        # Clone the repo
         f"cd ~ && git clone https://github.com/Aniruthan-0709/{REPO_NAME}.git || echo 'Repo already cloned'",
+
+        # Create virtualenv and install requirements from root
         f"cd {REPO_NAME} && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt",
-        f"cd {REPO_NAME}/backend && nohup venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 &",
-        f"cd {REPO_NAME}/sentiment-app/frontend && nohup venv/bin/streamlit run app.py --server.address 0.0.0.0 --server.port 8501 &"
+
+        # Start FastAPI from sentiment-app/backend
+        f"cd {REPO_NAME}/sentiment-app/backend && nohup ../../venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 &",
+
+        # Start Streamlit from sentiment-app/frontend
+        f"cd {REPO_NAME}/sentiment-app/frontend && nohup ../../venv/bin/streamlit run app.py --server.address 0.0.0.0 --server.port 8501 &"
     ]
 
     for cmd in commands:
-        print(f"\n⚙️ Running: {cmd}")
+        print(f"
+⚙️ Running: {cmd}")
         stdin, stdout, stderr = ssh.exec_command(cmd)
         print(stdout.read().decode())
         print(stderr.read().decode())
@@ -55,7 +63,8 @@ def run_remote_commands(public_ip):
     print("🚀 App successfully deployed.")
 
 def health_check(public_ip):
-    print("\n🧪 Performing health checks...")
+    print("
+🧪 Performing health checks...")
     endpoints = {
         "FastAPI": f"http://{public_ip}:8000/docs",
         "Streamlit": f"http://{public_ip}:8501"
