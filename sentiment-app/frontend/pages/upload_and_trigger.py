@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 from io import BytesIO
 
-API_URL = "http://localhost:8001"
+API_URL = "http://localhost:8000"
 BUCKET_NAME = "mlops-sentiment-app"
 
 # ---------------------------

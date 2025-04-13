@@ -1,7 +1,7 @@
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:8001"  # URL of your FastAPI backend
+API_URL = "http://localhost:8000"  # URL of your FastAPI backend
 
 def login():
     st.set_page_config(page_title="Login | Sentiment App", page_icon="🔐")
