@@ -30,6 +30,9 @@ def get_public_ip():
 
 def upload_env_file(public_ip):
     print("🛂 Uploading .env file to backend folder...")
+    if not os.path.exists(ENV_PATH):
+        raise FileNotFoundError(f"⚠️ .env file not found at: {ENV_PATH}")
+
     key = paramiko.RSAKey.from_private_key_file(KEY_PATH)
     transport = paramiko.Transport((public_ip, 22))
     transport.connect(username=USERNAME, pkey=key)
@@ -89,8 +92,13 @@ def run_remote_commands(public_ip):
 
     # === START BACKEND & FRONTEND ===
     launch_commands = [
-        f"cd {REPO_NAME} && nohup PYTHONPATH=./sentiment-app venv/bin/uvicorn sentiment-app.backend.main:app --host 0.0.0.0 --port 8000 > backend.log 2>&1 &",
-        f"cd {REPO_NAME}/sentiment-app/frontend && nohup ../../venv/bin/streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501 > frontend.log 2>&1 &"
+        f"""
+        nohup /home/ec2-user/{REPO_NAME}/venv/bin/python -m uvicorn sentiment-app.backend.main:app --host 0.0.0.0 --port 8000 > /home/ec2-user/{REPO_NAME}/fastapi.log 2>&1 &
+        """,
+
+        f"""
+        nohup /home/ec2-user/{REPO_NAME}/venv/bin/streamlit run {REPO_NAME}/sentiment-app/frontend/streamlit_app.py --server.address 0.0.0.0 --server.port 8501 > /home/ec2-user/{REPO_NAME}/streamlit.log 2>&1 &
+        """
     ]
 
     for cmd in launch_commands:
