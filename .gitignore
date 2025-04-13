@@ -3,7 +3,6 @@
 **/.env
 sentiment-app/.env
 sentiment-app/backend/.env
-
 # 📦 Local folders not meant for Git
 config/
 data/
@@ -36,3 +35,6 @@ tmp/
 
 # 🚫 Ignore Spark temporary files
 ._SUCCESS
+
+# Protect key.pem from being pushed
+**/key.pem
