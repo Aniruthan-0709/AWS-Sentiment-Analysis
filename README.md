@@ -1,6 +1,3 @@
-Certainly! Below is your complete `README.md` with the **step-by-step textual pipeline flowchart** seamlessly added **after the Visual Overview** section. This preserves your existing structure and enhances clarity by detailing the entire pipeline lifecycle.
-
----
 
 ```markdown
 # 🧠 AWS Sentiment Analysis Pipeline
