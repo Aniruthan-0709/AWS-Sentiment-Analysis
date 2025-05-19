@@ -25,135 +25,89 @@ sentiment-app/
 
 ---
 
-## 🔄 Data Pipeline (AWS Glue with Amazon S3)
+## 🔄 Data Pipeline (AWS Glue)
 
-**AWS Services**: Amazon S3, AWS Glue, AWS Glue Workflows
+| Step              | Script                  | Input                             | Output                                  |
+| ----------------- | ----------------------- | --------------------------------- | --------------------------------------- |
+| Preprocessing     | `data_preprocessing.py` | `Bronze/train.parquet`            | `Bronze/pre_processed.parquet`          |
+| Schema Validation | `schema_validation.py`  | `Bronze/pre_processed.parquet`    | `Bronze/schema_validated.parquet`       |
+| Anomaly Detection | `anomaly_detection.py`  | `Bronze/schema_validated.parquet` | `Bronze/anomaly_flagged.parquet`        |
+| Sampling          | `sampling.py`           | `Bronze/anomaly_flagged.parquet`  | `Silver/sampled.csv`, `Silver/test.csv` |
 
-1. **Amazon S3 (Raw Zone)**:
-
-   * Raw review data is uploaded to `s3://mlops-sentiment-analysis-data/raw/reviews.csv`
-
-2. **Glue Job - Preprocessing (`data_preprocessing.py`)**:
-
-   * Drops null/empty `review_body`
-   * Cleans & normalizes review text
-   * Saves cleaned data to `Bronze/pre_processed.parquet`
-
-3. **Glue Job - Schema Validation (`schema_validation.py`)**:
-
-   * Checks for nulls, logs out-of-range star ratings
-   * Calculates average review length → saved to metadata
-   * Output: `Bronze/schema_validated.parquet`
-
-4. **Glue Job - Anomaly Detection (`anomaly_detection.py`)**:
-
-   * Flags anomalies based on review length and star rating
-   * Output: `Bronze/anomaly_flagged.parquet`
-
-5. **Glue Job - Sampling (`sampling.py`)**:
-
-   * Drops 3-star reviews
-   * Adds binary labels
-   * Saves to `Silver/sampled.csv` and `Silver/test.csv`
-
-6. **Workflow**:
-
-   * Orchestrated using **AWS Glue Workflows**
+**Orchestrated via**: AWS Glue Workflows
 
 ---
 
-## 🤗 Model Training & Evaluation (Amazon SageMaker)
+## 🤗 Model Training & Evaluation (SageMaker)
 
-**AWS Services**: Amazon S3, Amazon SageMaker
+* **Model**: DistilBERT
+* **Training**: AWS SageMaker (`Silver/sampled.csv`)
+* **Evaluation**: Local using Hugging Face `Trainer.evaluate()` on `Silver/test.csv`
+* **Metrics**:
 
-* **Model**: DistilBERT (binary classification)
-* **Training**:
-
-  * Input: `s3://mlops-sentiment-analysis-data/Silver/sampled.csv`
-  * Output: `s3://mlops-sentiment-analysis-data/models/model.tar.gz`
-* **Evaluation**:
-
-  * Input: `Silver/test.csv`
-  * Metrics: Accuracy (93.14%), Precision (94.34%), Recall (91.78%), F1 Score (93.05%)
-  * Metadata: `model_evaluation_summary.json`
+  * Accuracy: 93.14%
+  * Precision: 94.34%
+  * Recall: 91.78%
+  * F1 Score: 93.05%
+* **Artifacts**: `s3://mlops-sentiment-analysis-data/models/model.tar.gz`
 
 ---
 
-## 🚀 Deployment (Amazon ECS + EC2)
+## 🚀 Deployment
 
-**AWS Services**: Amazon ECS Fargate, Amazon EC2, Amazon S3, AWS Cognito
+### 🖥️ Backend (FastAPI)
+
+* `/login` - AWS Cognito
+* `/trigger_pipeline` - Launch ECS job
+* `/generate_dashboard` - Generate dashboard
+
+### 🌐 Frontend (Streamlit)
+
+* Upload CSV → Trigger pipeline → View dashboard
+* Polls ECS job status in real-time
 
 ### 🐳 ECS Fargate Execution
 
-* Containerized with Spark + Transformers
-* `run_all.py`: Combines `run_clean.py` and `run_infer.py`
-* Output:
-
-  * `processed/{user}/processed.csv`
-  * `output/{user}/served.csv`
-
-### 🖥️ Backend (FastAPI on EC2)
-
-* `/login` - AWS Cognito-based auth
-* `/trigger_pipeline` - Launch ECS task
-* `/generate_dashboard` - Serve metrics and top reviews
-
-### 🌐 Frontend (Streamlit on EC2)
-
-* Uploads CSV → triggers ECS → displays dashboard
-* Monitors pipeline progress in real-time
+* `run_all.py`: Executes preprocessing and inference using Spark and Transformers
+* Output saved to S3: `processed/{user}/processed.csv`, `output/{user}/served.csv`
 
 ---
 
 ## 🔁 CI/CD (GitHub Actions)
 
-### ✅ Continuous Integration
+### ✅ Continuous Integration (CI)
 
-* Triggered on push
+* Run on every push
 * Installs dependencies
-* Runs `pytest`
+* Executes unit tests with `pytest`
 
-### 🚀 Continuous Deployment
+### 🚀 Continuous Deployment (CD)
 
 * Builds Docker image
 * Pushes to AWS ECR
-* Updates ECS task with new image
-* Optionally triggers SageMaker training
+* Deploys updated image to ECS task
+* Triggers SageMaker training and logs output to MLflow
 
 ---
 
 ## 🔐 Environment Setup
 
-* `.env` includes credentials for Cognito, S3, ECS task definition, and ECR repository
-* Transferred securely via SCP to EC2
+* `.env` file includes credentials for Cognito, ECS, and S3
+* Transferred securely via SCP to EC2 instance
 
 ---
 
 ## 📊 Visual Overview
 
-### 🔸 AWS-Based Pipeline Architecture
+### 🔸 Data + Model + Deployment Pipeline
 
 ```mermaid
 flowchart TD
-  subgraph Data Pipeline
-    A1[Amazon S3 (Raw)] --> A2[AWS Glue: Preprocessing]
-    A2 --> A3[AWS Glue: Schema Validation]
-    A3 --> A4[AWS Glue: Anomaly Detection]
-    A4 --> A5[AWS Glue: Sampling]
-    A5 --> A6[Amazon S3 (Silver)]
-  end
-
-  subgraph Model Training
-    A6 --> B1[Amazon SageMaker: Train DistilBERT]
-    B1 --> B2[Amazon S3: model.tar.gz]
-  end
-
-  subgraph Model Deployment
-    B2 --> C1[Amazon ECS Fargate: run_all.py]
-    C1 --> C2[Amazon S3: Predictions]
-    C2 --> C3[EC2 FastAPI + Streamlit]
-    C3 --> C4[User Dashboard]
-  end
+    A[Upload CSV via Streamlit] --> B[FastAPI Trigger]
+    B --> C[ECS Fargate: run_all.py]
+    C --> D[S3: processed.csv + served.csv]
+    D --> E[FastAPI: generate_dashboard]
+    E --> F[Streamlit: Display Results]
 ```
 
 ---
@@ -187,8 +141,8 @@ $ tail -f streamlit.log
 
 ## 🙌 Credits
 
-Built using: Amazon S3, AWS Glue, Amazon SageMaker, Amazon ECS, Amazon EC2, AWS Cognito, FastAPI, Streamlit, HuggingFace, PySpark, MLflow
+Built using: AWS Glue, SageMaker, ECS Fargate, EC2, FastAPI, Streamlit, HuggingFace, PySpark, MLflow
 
 ---
 
-> ✨ Fully CI/CD-enabled, AWS-architected sentiment analysis app ready for production!
+> ✨ Fully CI/CD-enabled, cloud-optimized sentiment analysis app ready for production!
