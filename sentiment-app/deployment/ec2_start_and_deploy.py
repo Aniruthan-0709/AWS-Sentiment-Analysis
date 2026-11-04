@@ -2,6 +2,7 @@ import boto3
 import time
 import paramiko
 import os
+import sys
 import requests
 
 # === CONFIGURATION ===
@@ -11,6 +12,7 @@ ENV_PATH = os.path.join(os.path.dirname(__file__), '..', 'backend', '.env')
 REPO_NAME = 'AWS-Sentiment-Analysis'
 USERNAME = 'ec2-user'
 REGION = 'us-east-1'
+HEALTH_CHECK_ATTEMPTS = 6
 
 # === AWS CLIENT ===
 ec2 = boto3.client('ec2', region_name=REGION)
@@ -63,6 +65,9 @@ def run_remote_commands(public_ip):
 
     # === SETUP STEPS ===
     setup_commands = [
+        # Stop the previous deploy, or it keeps the ports and serves the old code.
+        # The [u] and [s] stop pkill from matching this shell's own command line.
+        "pkill -f '[u]vicorn backend.main'; pkill -f '[s]treamlit run'; true",
         f"cd ~ && rm -rf {REPO_NAME} && git clone https://github.com/Aniruthan-0709/{REPO_NAME}.git",
         f"cd {REPO_NAME} && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install -r requirements.txt"
     ]
@@ -93,7 +98,7 @@ def run_remote_commands(public_ip):
     # === START BACKEND & FRONTEND ===
     launch_commands = [
         f"""
-        nohup /home/ec2-user/{REPO_NAME}/venv/bin/python -m uvicorn sentiment-app.backend.main:app --host 0.0.0.0 --port 8000 > /home/ec2-user/{REPO_NAME}/fastapi.log 2>&1 &
+        cd /home/ec2-user/{REPO_NAME}/sentiment-app && nohup /home/ec2-user/{REPO_NAME}/venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 > /home/ec2-user/{REPO_NAME}/fastapi.log 2>&1 &
         """,
 
         f"""
@@ -116,15 +121,25 @@ def health_check(public_ip):
         "FastAPI": f"http://{public_ip}:8000/docs",
         "Streamlit": f"http://{public_ip}:8501"
     }
+    failed = []
     for name, url in endpoints.items():
-        try:
-            r = requests.get(url, timeout=10)
-            if r.status_code == 200:
-                print(f"✅ {name} is live at {url}")
-            else:
+        for attempt in range(HEALTH_CHECK_ATTEMPTS):
+            try:
+                r = requests.get(url, timeout=10)
+                if r.status_code == 200:
+                    print(f"✅ {name} is live at {url}")
+                    break
                 print(f"⚠️ {name} responded with status {r.status_code}")
-        except Exception as e:
-            print(f"❌ {name} not reachable: {e}")
+            except Exception as e:
+                print(f"❌ {name} not reachable: {e}")
+            if attempt < HEALTH_CHECK_ATTEMPTS - 1:
+                time.sleep(10)
+        else:
+            failed.append(name)
+
+    # A non-zero exit is what marks the GitHub Actions deploy as failed.
+    if failed:
+        sys.exit(f"❌ Health check failed for: {', '.join(failed)}")
 
 # === MAIN EXECUTION ===
 if __name__ == "__main__":

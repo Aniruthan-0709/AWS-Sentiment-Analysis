@@ -75,18 +75,41 @@ sentiment-app/
 
 ## 🔁 CI/CD (GitHub Actions)
 
+The workflow is defined in `.github/workflows/ci_cd.yml`.
+
 ### ✅ Continuous Integration (CI)
 
-* Run on every push
-* Installs dependencies
-* Executes unit tests with `pytest`
+* Runs on pushes to `main` and on pull requests
+* Installs dependencies and checks that all Python files compile
+* Runs the backend tests with `pytest` (AWS is mocked, so no credentials are needed)
+
+To run the tests locally:
+
+```bash
+cd sentiment-app
+pip install -r requirements.txt pytest httpx
+python -m pytest tests
+```
 
 ### 🚀 Continuous Deployment (CD)
 
-* Builds Docker image
-* Pushes to AWS ECR
-* Deploys updated image to ECS task
-* Triggers SageMaker training and logs output to MLflow
+The deploy job runs after the tests pass. It starts the EC2 instance, deploys the latest `main`, restarts FastAPI and Streamlit, and fails if either one doesn't respond. It doesn't build the ECS pipeline image or trigger SageMaker training.
+
+* **Manual deploy:** Actions tab → CI/CD → Run workflow, on `main`
+* **Deploy on every push to `main`:** set the repository variable `AUTO_DEPLOY` to `true`
+
+The instance keeps running after a deploy. Run `sentiment-app/deployment/ec2_stop.py` to stop it.
+
+Setup required before the first deploy:
+
+| Repository secret       | Value                                                                                     |
+| ----------------------- | ----------------------------------------------------------------------------------------- |
+| `AWS_ACCESS_KEY_ID`     | Key for an IAM user allowed `ec2:StartInstances` and `ec2:DescribeInstances`               |
+| `AWS_SECRET_ACCESS_KEY` | Secret for that key                                                                       |
+| `EC2_SSH_KEY`           | Full contents of `key.pem` (must be an RSA key)                                           |
+| `BACKEND_ENV`           | Full contents of `sentiment-app/backend/.env`                                             |
+
+The instance's security group must also allow inbound SSH (port 22) from the GitHub Actions runners, and ports 8000 and 8501 for the health checks.
 
 ---
 
