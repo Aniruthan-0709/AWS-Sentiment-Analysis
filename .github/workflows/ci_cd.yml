@@ -1,0 +1,71 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: # "Run workflow" button in the Actions tab: tests, then deploys main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: sentiment-app/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r sentiment-app/requirements.txt pytest httpx
+
+      - name: Check all Python files compile
+        run: python -m compileall -q scripts sentiment-app
+
+      - name: Run backend tests
+        working-directory: sentiment-app
+        run: python -m pytest tests -v
+
+  deploy:
+    needs: test
+    # Deploys start a paid EC2 instance, so they only run from main, either on
+    # request or on every push once the AUTO_DEPLOY repo variable is "true".
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && vars.AUTO_DEPLOY == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: deploy-ec2
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deploy dependencies
+        run: pip install boto3 paramiko requests
+
+      - name: Write SSH key and backend .env from secrets
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
+        run: |
+          umask 077
+          printf '%s\n' "$EC2_SSH_KEY" > sentiment-app/deployment/key.pem
+          printf '%s\n' "$BACKEND_ENV" > sentiment-app/backend/.env
+
+      - name: Start EC2 and deploy
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: python sentiment-app/deployment/ec2_start_and_deploy.py
